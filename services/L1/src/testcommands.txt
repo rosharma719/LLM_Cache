@@ -1,0 +1,8 @@
+# OpenAI provider
+npx vitest run test/openai.provider.spec.ts --reporter=verbose
+
+# Vector ingestion route
+npx vitest run test/cache.vector.ingestion.spec.ts --reporter=verbose
+
+# Redis-backed KV (requires Redis running)
+REDIS_URL=redis://127.0.0.1:6379 npx vitest run test/l1.kv.spec.ts --reporter=verbose

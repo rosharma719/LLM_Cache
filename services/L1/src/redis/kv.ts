@@ -10,18 +10,20 @@ export async function upsertItem(rec: UpsertItemArgs): Promise<ItemId> {
   const item_id: ItemId = rec.item_id ?? genItemId(rec.ns);
   const key = itemKey(item_id);
 
-  const exists = await redis.exists(key);
   const now = Date.now();
 
-  const prevCreated = exists ? Number(await redis.hget(key, 'created_at')) : undefined;
-  const created_at = prevCreated ?? now;
+  const [prevCreatedRaw, prevVersionRaw] = await redis.hmget(key, 'created_at', 'version');
+  const hasExisting = Boolean(prevCreatedRaw);
+  const created_at = prevCreatedRaw ? Number(prevCreatedRaw) : now;
 
   // ensure updated_at is strictly > created_at on updates
-  const updated_at = exists && now <= created_at ? created_at + 1 : now;
+  const updated_at = hasExisting && now <= created_at ? created_at + 1 : now;
 
-  const version = exists ? Number(await redis.hget(key, 'version')) + 1 : 1;
+  const version = prevVersionRaw ? Number(prevVersionRaw) + 1 : 1;
 
-  await redis.hset(key, {
+  const multi = redis.multi();
+
+  multi.hset(key, {
     item_id,
     ns: rec.ns,
     text: rec.text,
@@ -32,11 +34,12 @@ export async function upsertItem(rec: UpsertItemArgs): Promise<ItemId> {
     version: String(version),
   });
 
-  await redis.sadd(nsItemsKey(rec.ns), item_id);
+  multi.sadd(nsItemsKey(rec.ns), item_id);
 
   if (rec.ttl_s && rec.ttl_s > 0) {
-    await redis.expire(key, rec.ttl_s);
+    multi.expire(key, rec.ttl_s);
   }
+  await multi.exec();
 
   return item_id;
 }

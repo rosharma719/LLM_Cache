@@ -12,7 +12,7 @@ export interface ItemRecord {
   version: number;
 }
 
-// ✅ Use a separate type for write inputs (item_id is optional)
+// Use a separate type for write inputs (item_id is optional)
 export interface UpsertItemArgs {
   ns: Namespace;
   text: string;

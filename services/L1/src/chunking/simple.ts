@@ -5,15 +5,25 @@ export interface Chunk {
 }
 
 export function chunkText(text: string, size = 1200, overlap = 150): Chunk[] {
+  if (size <= 0) throw new Error('chunk size must be positive');
+
+  const step = Math.max(1, size - Math.max(0, overlap));
   const chunks: Chunk[] = [];
-  let i = 0, seq = 0;
-  while (i < text.length) {
-    const end = Math.min(i + size, text.length);
-    chunks.push({ seq, text: text.slice(i, end) });
+
+  let start = 0;
+  let seq = 0;
+  while (start < text.length) {
+    const end = Math.min(start + size, text.length);
+    chunks.push({ seq, text: text.slice(start, end) });
     seq += 1;
-    i = end - overlap;
-    if (i < 0) i = 0;
-    if (i >= text.length) break;
+
+    if (end === text.length) break;
+    start += step;
   }
+
+  if (chunks.length === 0) {
+    chunks.push({ seq: 0, text });
+  }
+
   return chunks;
 }

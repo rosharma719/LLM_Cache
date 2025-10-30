@@ -1,6 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { upsertItem, getItem, deleteItem, listItemIds, getTTL, setTTL } from '../redis/kv';
+import { chunkText } from '../chunking/simple';
+import { getEmbeddingProvider } from '../embeddings';
+import { upsertChunks } from '../redis/chunk';
 
 // ---------- Schemas ----------
 const writeSchema = z.object({
@@ -35,6 +38,9 @@ const ttlGetSchema = z.object({
   item_id: z.string().min(1),
 });
 
+const VECTOR_ERROR_EMBED = 'vectorization_failed';
+const VECTOR_ERROR_STORE = 'vector_store_failed';
+
 // ---------- Helper ----------
 function badRequest(reply: any, parsed: Extract<z.SafeParseReturnType<any, any>, { success: false }>) {
   return reply.code(400).send({ error: parsed.error.flatten() });
@@ -60,8 +66,53 @@ export async function registerCacheRoutes(app: FastifyInstance) {
       }
     }
 
+    const chunks = chunkText(text);
+    let vectors: Float32Array[] | undefined;
+    let vectorError: string | undefined;
+
+    if (chunks.length > 0) {
+      try {
+        const provider = getEmbeddingProvider();
+        vectors = await provider.embed(chunks.map((chunk) => chunk.text));
+        if (vectors.length !== chunks.length) {
+          throw new Error(`expected ${chunks.length} embeddings, received ${vectors.length}`);
+        }
+      } catch (err) {
+        req.log.error({ err }, 'Vectorization failed for cache.write payload');
+        vectorError = VECTOR_ERROR_EMBED;
+        vectors = undefined;
+      }
+    }
+
     const id = await upsertItem({ ns, item_id, text, meta_json, ttl_s });
-    return reply.send({ item_id: id });
+
+    let vectorized = false;
+    if (!vectorError && chunks.length > 0 && vectors) {
+      try {
+        const now = Date.now();
+        await upsertChunks(
+          ns,
+          id,
+          chunks.map((chunk) => ({
+            seq: chunk.seq,
+            text: chunk.text,
+            meta_json,
+          })),
+          vectors,
+          now,
+          ttl_s,
+        );
+        vectorized = true;
+      } catch (err) {
+        req.log.error({ err }, 'Failed to persist chunk vectors');
+        vectorError = VECTOR_ERROR_STORE;
+      }
+    }
+
+    const response: Record<string, unknown> = { item_id: id, vectorized };
+    if (vectorError) response.vector_error = vectorError;
+
+    return reply.send(response);
   });
 
   // Read

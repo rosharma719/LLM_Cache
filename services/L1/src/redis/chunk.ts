@@ -8,49 +8,41 @@ export async function upsertChunks(
   ns: string,
   item_id: string,
   chunks: { seq: number; text: string; meta_json?: string }[],
+  vectors?: Float32Array[],
   now = Date.now(),
   ttl_s?: number
 ) {
-  const r = getRedis();
-  const multi = r.multi();
+  if (chunks.length === 0) return;
 
-  // replace membership set
+  const redis = getRedis();
+  const multi = redis.multi();
+
   multi.del(itemChunksKey(item_id));
 
-  for (const c of chunks) {
-    const chunk_id = `${item_id}#${c.seq}`;
-    multi.hset(chunkKey(chunk_id), {
+  chunks.forEach((chunk, idx) => {
+    const chunk_id = `${item_id}#${chunk.seq}`;
+    const payload: Record<string, string | Buffer> = {
       chunk_id,
       item_id,
       ns,
-      seq: String(c.seq),
-      text: c.text,
-      meta_json: c.meta_json ?? '',
+      seq: String(chunk.seq),
+      text: chunk.text,
+      meta_json: chunk.meta_json ?? '',
       created_at: String(now),
       updated_at: String(now),
-    });
+    };
+
+    const vec = vectors?.[idx];
+    if (vec) {
+      payload.vec = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+    }
+
+    multi.hset(chunkKey(chunk_id), payload);
     multi.sadd(itemChunksKey(item_id), chunk_id);
-    if (ttl_s && ttl_s > 0) multi.expire(chunkKey(chunk_id), ttl_s);
-  }
-
-  await multi.exec();
-}
-
-export async function setChunkVectors(
-  item_id: string,
-  vectors: { seq: number; vec: Float32Array }[],
-  ttl_s?: number
-) {
-  const r = getRedis();
-  const multi = r.multi();
-
-  for (const { seq, vec } of vectors) {
-    const chunk_id = `${item_id}#${seq}`;
-    // Redis expects binary; convert Float32Array to Buffer
-    const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-    multi.hset(chunkKey(chunk_id), { vec: buf });
-    if (ttl_s && ttl_s > 0) multi.expire(chunkKey(chunk_id), ttl_s);
-  }
+    if (ttl_s && ttl_s > 0) {
+      multi.expire(chunkKey(chunk_id), ttl_s);
+    }
+  });
 
   await multi.exec();
 }

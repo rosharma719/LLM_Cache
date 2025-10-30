@@ -1,8 +1,19 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/server';
 import { getRedis } from '../src/redis/client';
+import type { HTTPMethods } from 'fastify/types/utils';
 
-let app: Awaited<ReturnType<typeof buildApp>>;
+type AppInstance = Awaited<ReturnType<typeof buildApp>>;
+let app: AppInstance;
+type MinimalInjectOptions = {
+  method: HTTPMethods;
+  url: string;
+  payload?: unknown;
+};
+type MinimalInjectResponse = {
+  statusCode: number;
+  json(): unknown;
+};
 
 beforeAll(async () => {
   // Ensure Redis is up and clean
@@ -18,13 +29,20 @@ afterAll(async () => {
   await app.close();
 });
 
-beforeEach(async () => {
-  // no-op; you could flush here instead of in individual tests if needed
-});
+async function injectWithTiming(
+  label: string,
+  opts: MinimalInjectOptions,
+): Promise<{ res: MinimalInjectResponse; ms: number }> {
+  const start = performance.now();
+  const res = (await app.inject(opts as any)) as unknown as MinimalInjectResponse;
+  const ms = performance.now() - start;
+  console.log(`[timings] ${label}: ${ms.toFixed(3)}ms`);
+  return { res, ms };
+}
 
 describe('L1 KV - basics', () => {
   it('health returns ok', async () => {
-    const res = await app.inject({ method: 'GET', url: '/health' });
+    const { res } = await injectWithTiming('GET /health', { method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { status: string; redis: string };
     expect(body.status).toBe('ok');
@@ -32,7 +50,7 @@ describe('L1 KV - basics', () => {
   });
 
   it('write -> get roundtrip', async () => {
-    const write = await app.inject({
+    const { res: write } = await injectWithTiming('POST /cache.write (setup)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'test', text: 'hello', ttl_s: 60 }
@@ -41,7 +59,7 @@ describe('L1 KV - basics', () => {
     const { item_id } = write.json() as { item_id: string };
     expect(item_id).toMatch(/^test:/);
 
-    const read = await app.inject({
+    const { res: read } = await injectWithTiming('GET /cache.get', {
       method: 'GET',
       url: `/cache.get?ns=test&item_id=${encodeURIComponent(item_id)}`
     });
@@ -54,7 +72,7 @@ describe('L1 KV - basics', () => {
 
   it('update same item_id increments version', async () => {
     // initial write
-    const w1 = await app.inject({
+    const { res: w1 } = await injectWithTiming('POST /cache.write (initial)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'test', text: 'v1' }
@@ -62,14 +80,14 @@ describe('L1 KV - basics', () => {
     const id = (w1.json() as any).item_id;
 
     // update with same id
-    const w2 = await app.inject({
+    const { res: w2 } = await injectWithTiming('POST /cache.write (update same id)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'test', item_id: id, text: 'v2' }
     });
     expect(w2.statusCode).toBe(200);
 
-    const read = await app.inject({
+    const { res: read } = await injectWithTiming('GET /cache.get (after update)', {
       method: 'GET',
       url: `/cache.get?ns=test&item_id=${encodeURIComponent(id)}`
     });
@@ -80,14 +98,14 @@ describe('L1 KV - basics', () => {
   });
 
   it('namespace isolation: cannot read with wrong ns', async () => {
-    const w = await app.inject({
+    const { res: w } = await injectWithTiming('POST /cache.write (ns isolation setup)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'nsA', text: 'secret' }
     });
     const id = (w.json() as any).item_id;
 
-    const wrong = await app.inject({
+    const { res: wrong } = await injectWithTiming('GET /cache.get (wrong namespace)', {
       method: 'GET',
       url: `/cache.get?ns=nsB&item_id=${encodeURIComponent(id)}`
     });
@@ -95,10 +113,10 @@ describe('L1 KV - basics', () => {
   });
 
   it('list returns ids', async () => {
-    await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS', text: 'a' } });
-    await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS', text: 'b' } });
+    await injectWithTiming('POST /cache.write (list setup a)', { method: 'POST', url: '/cache.write', payload: { ns: 'listNS', text: 'a' } });
+    await injectWithTiming('POST /cache.write (list setup b)', { method: 'POST', url: '/cache.write', payload: { ns: 'listNS', text: 'b' } });
 
-    const res = await app.inject({
+    const { res } = await injectWithTiming('GET /cache.list', {
       method: 'GET',
       url: '/cache.list?ns=listNS&count=10'
     });
@@ -109,21 +127,21 @@ describe('L1 KV - basics', () => {
   });
 
   it('ttl can be set and read', async () => {
-    const w = await app.inject({
+    const { res: w } = await injectWithTiming('POST /cache.write (ttl setup)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'ttlNS', text: 'tmp', ttl_s: 2 }
     });
     const id = (w.json() as any).item_id;
 
-    const t1 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+    const { res: t1 } = await injectWithTiming('GET /cache.ttl (initial)', { method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
     expect(t1.statusCode).toBe(200);
     const { ttl } = t1.json() as { ttl: number };
     expect(typeof ttl).toBe('number');
     expect(ttl).toBeGreaterThan(0);
 
     // also test /cache.ttl POST to extend
-    const set = await app.inject({
+    const { res: set } = await injectWithTiming('POST /cache.ttl (extend)', {
       method: 'POST',
       url: '/cache.ttl',
       payload: { item_id: id, ttl_s: 10 }
@@ -131,20 +149,20 @@ describe('L1 KV - basics', () => {
     expect(set.statusCode).toBe(200);
     expect((set.json() as any).ok).toBe(true);
 
-    const t2 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+    const { res: t2 } = await injectWithTiming('GET /cache.ttl (after extend)', { method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
     const { ttl: ttl2 } = t2.json() as { ttl: number };
     expect(ttl2).toBeGreaterThanOrEqual(8);
   });
 
   it('delete removes the item', async () => {
-    const w = await app.inject({
+    const { res: w } = await injectWithTiming('POST /cache.write (delete setup)', {
       method: 'POST',
       url: '/cache.write',
       payload: { ns: 'delNS', text: 'bye' }
     });
     const id = (w.json() as any).item_id;
 
-    const del = await app.inject({
+    const { res: del } = await injectWithTiming('DELETE /cache.delete', {
       method: 'DELETE',
       url: '/cache.delete',
       payload: { ns: 'delNS', item_id: id }
@@ -152,7 +170,7 @@ describe('L1 KV - basics', () => {
     expect(del.statusCode).toBe(200);
     expect((del.json() as any).ok).toBe(true);
 
-    const read = await app.inject({
+    const { res: read } = await injectWithTiming('GET /cache.get (after delete)', {
       method: 'GET',
       url: `/cache.get?ns=delNS&item_id=${encodeURIComponent(id)}`
     });
@@ -160,7 +178,7 @@ describe('L1 KV - basics', () => {
   });
 
   it('bad inputs are rejected (400)', async () => {
-    const res = await app.inject({
+    const { res } = await injectWithTiming('POST /cache.write (bad input)', {
       method: 'POST',
       url: '/cache.write',
       payload: { text: 'missing-ns' }
@@ -169,7 +187,7 @@ describe('L1 KV - basics', () => {
   });
 
   it('write -> get preserves meta (JSON roundtrip)', async () => {
-  const write = await app.inject({
+  const { res: write } = await injectWithTiming('POST /cache.write (meta setup)', {
     method: 'POST',
     url: '/cache.write',
     payload: { ns: 'metaNS', text: 'with meta', meta: { a: 1, b: 'x' }, ttl_s: 30 },
@@ -177,7 +195,7 @@ describe('L1 KV - basics', () => {
   expect(write.statusCode).toBe(200);
   const { item_id } = write.json() as { item_id: string };
 
-  const read = await app.inject({
+  const { res: read } = await injectWithTiming('GET /cache.get (meta)', {
     method: 'GET',
     url: `/cache.get?ns=metaNS&item_id=${encodeURIComponent(item_id)}`,
   });
@@ -187,10 +205,10 @@ describe('L1 KV - basics', () => {
 });
 
 it('list returns ids with namespace prefix', async () => {
-  await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'a' } });
-  await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'b' } });
+  await injectWithTiming('POST /cache.write (listNS2 setup a)', { method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'a' } });
+  await injectWithTiming('POST /cache.write (listNS2 setup b)', { method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'b' } });
 
-  const res = await app.inject({
+  const { res } = await injectWithTiming('GET /cache.list (namespace prefix)', {
     method: 'GET',
     url: '/cache.list?ns=listNS2&count=10',
   });
@@ -201,7 +219,7 @@ it('list returns ids with namespace prefix', async () => {
 });
 
 it('ttl endpoint rejects bad inputs with 400', async () => {
-  const badTtl = await app.inject({
+  const { res: badTtl } = await injectWithTiming('POST /cache.ttl (bad input)', {
     method: 'POST',
     url: '/cache.ttl',
     payload: { item_id: 'x', ttl_s: -5 },
@@ -210,25 +228,25 @@ it('ttl endpoint rejects bad inputs with 400', async () => {
 });
 
 it('ttl can be extended (sanity check >= previous)', async () => {
-  const w = await app.inject({
+  const { res: w } = await injectWithTiming('POST /cache.write (ttlNS2 setup)', {
     method: 'POST',
     url: '/cache.write',
     payload: { ns: 'ttlNS2', text: 'tmp', ttl_s: 2 },
   });
   const id = (w.json() as any).item_id;
 
-  const t1 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+  const { res: t1 } = await injectWithTiming('GET /cache.ttl (ttlNS2 initial)', { method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
   const { ttl: ttl1 } = t1.json() as { ttl: number };
   expect(typeof ttl1).toBe('number');
 
-  const set = await app.inject({
+  const { res: set } = await injectWithTiming('POST /cache.ttl (ttlNS2 extend)', {
     method: 'POST',
     url: '/cache.ttl',
     payload: { item_id: id, ttl_s: 10 },
   });
   expect(set.statusCode).toBe(200);
 
-  const t2 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+  const { res: t2 } = await injectWithTiming('GET /cache.ttl (ttlNS2 after extend)', { method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
   const { ttl: ttl2 } = t2.json() as { ttl: number };
   expect(ttl2).toBeGreaterThan(ttl1);
 });
