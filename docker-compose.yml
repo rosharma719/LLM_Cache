@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis/redis-stack:latest
+    container_name: redis-stack
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  l1:
+    build:
+      context: ./services/L1
+      dockerfile: Dockerfile
+    container_name: l1-service
+    # Inside the compose network, "redis" is the hostname
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      PORT: "8080"
+      HOST: 0.0.0.0
+      # Embeddings envs get passed from your host .env if you prefer:
+      # EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER}
+      # OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    # For local dev hot-reload you could mount and switch to `npm run dev`:
+    # volumes:
+    #   - ./services/L1:/app
+    # command: ["npm","run","dev"]
+
+volumes:
+  redis_data:

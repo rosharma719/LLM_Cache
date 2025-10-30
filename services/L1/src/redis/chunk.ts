@@ -1,4 +1,4 @@
-// src/redis/chunks.ts
+// src/redis/chunk.ts
 import { getRedis } from './client';
 
 const chunkKey = (chunkId: string) => `l1:chunk:${chunkId}`;

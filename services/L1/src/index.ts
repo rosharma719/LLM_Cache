@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { getRedis } from './redis/client';
 import { config } from './config';
 import { registerCacheRoutes } from './routes/cache';
+import { registerSearchRoutes } from './routes/search';
 
 /**
  * Main entrypoint for the L1 KV service.
@@ -24,6 +25,7 @@ async function main() {
 
   // --- Core cache routes ---
   await registerCacheRoutes(app);
+  await registerSearchRoutes(app);
 
   // --- Start server ---
   try {

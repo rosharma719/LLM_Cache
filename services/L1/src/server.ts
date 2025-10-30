@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { registerCacheRoutes } from './routes/cache';
+import { registerSearchRoutes } from './routes/search';
 import { getRedis } from './redis/client';
 
 export async function buildApp() {
@@ -16,5 +17,6 @@ export async function buildApp() {
   });
 
   await registerCacheRoutes(app);
+  await registerSearchRoutes(app);
   return app;
 }
