@@ -167,4 +167,70 @@ describe('L1 KV - basics', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('write -> get preserves meta (JSON roundtrip)', async () => {
+  const write = await app.inject({
+    method: 'POST',
+    url: '/cache.write',
+    payload: { ns: 'metaNS', text: 'with meta', meta: { a: 1, b: 'x' }, ttl_s: 30 },
+  });
+  expect(write.statusCode).toBe(200);
+  const { item_id } = write.json() as { item_id: string };
+
+  const read = await app.inject({
+    method: 'GET',
+    url: `/cache.get?ns=metaNS&item_id=${encodeURIComponent(item_id)}`,
+  });
+  expect(read.statusCode).toBe(200);
+  const obj = read.json() as any;
+  expect(obj.meta).toEqual({ a: 1, b: 'x' });
+});
+
+it('list returns ids with namespace prefix', async () => {
+  await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'a' } });
+  await app.inject({ method: 'POST', url: '/cache.write', payload: { ns: 'listNS2', text: 'b' } });
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/cache.list?ns=listNS2&count=10',
+  });
+  expect(res.statusCode).toBe(200);
+  const { item_ids } = res.json() as { item_ids: string[] };
+  expect(item_ids.length).toBeGreaterThanOrEqual(2);
+  for (const id of item_ids) expect(id.startsWith('listNS2:')).toBe(true);
+});
+
+it('ttl endpoint rejects bad inputs with 400', async () => {
+  const badTtl = await app.inject({
+    method: 'POST',
+    url: '/cache.ttl',
+    payload: { item_id: 'x', ttl_s: -5 },
+  });
+  expect(badTtl.statusCode).toBe(400);
+});
+
+it('ttl can be extended (sanity check >= previous)', async () => {
+  const w = await app.inject({
+    method: 'POST',
+    url: '/cache.write',
+    payload: { ns: 'ttlNS2', text: 'tmp', ttl_s: 2 },
+  });
+  const id = (w.json() as any).item_id;
+
+  const t1 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+  const { ttl: ttl1 } = t1.json() as { ttl: number };
+  expect(typeof ttl1).toBe('number');
+
+  const set = await app.inject({
+    method: 'POST',
+    url: '/cache.ttl',
+    payload: { item_id: id, ttl_s: 10 },
+  });
+  expect(set.statusCode).toBe(200);
+
+  const t2 = await app.inject({ method: 'GET', url: `/cache.ttl?item_id=${encodeURIComponent(id)}` });
+  const { ttl: ttl2 } = t2.json() as { ttl: number };
+  expect(ttl2).toBeGreaterThan(ttl1);
+});
+
 });

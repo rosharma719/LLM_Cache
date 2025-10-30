@@ -9,19 +9,25 @@ export async function upsertItem(rec: UpsertItemArgs): Promise<ItemId> {
 
   const item_id: ItemId = rec.item_id ?? genItemId(rec.ns);
   const key = itemKey(item_id);
-  const now = Date.now();
 
   const exists = await redis.exists(key);
-  const created_at = exists ? Number(await redis.hget(key, 'created_at')) : now;
+  const now = Date.now();
+
+  const prevCreated = exists ? Number(await redis.hget(key, 'created_at')) : undefined;
+  const created_at = prevCreated ?? now;
+
+  // ensure updated_at is strictly > created_at on updates
+  const updated_at = exists && now <= created_at ? created_at + 1 : now;
+
   const version = exists ? Number(await redis.hget(key, 'version')) + 1 : 1;
 
   await redis.hset(key, {
-    item_id,               // <- concrete string
+    item_id,
     ns: rec.ns,
     text: rec.text,
     meta_json: rec.meta_json ?? '',
     created_at: String(created_at),
-    updated_at: String(now),
+    updated_at: String(updated_at),           // <-- use monotonic value
     ttl_s: rec.ttl_s ? String(rec.ttl_s) : '',
     version: String(version),
   });
@@ -34,6 +40,7 @@ export async function upsertItem(rec: UpsertItemArgs): Promise<ItemId> {
 
   return item_id;
 }
+
 
 
 export async function getItem(ns: Namespace, item_id: ItemId): Promise<ItemRecord | null> {
