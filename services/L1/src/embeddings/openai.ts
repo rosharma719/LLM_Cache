@@ -20,11 +20,15 @@ export class OpenAIProvider implements EmbeddingProvider {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly endpoint = 'https://api.openai.com/v1/embeddings';
+  private readonly organization?: string;
+  private readonly project?: string;
 
   constructor() {
     this.apiKey = config.embeddings.openai.apiKey;
     this.model = config.embeddings.openai.model;
     this.dim = MODEL_DIMENSIONS[this.model] ?? 0;
+    this.organization = config.embeddings.openai.organization || undefined;
+    this.project = config.embeddings.openai.project || undefined;
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
@@ -39,6 +43,7 @@ export class OpenAIProvider implements EmbeddingProvider {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
+        ...this.buildOptionalHeaders(),
       },
       body: JSON.stringify({
         model: this.model,
@@ -70,6 +75,13 @@ export class OpenAIProvider implements EmbeddingProvider {
     }
 
     return vectors;
+  }
+
+  private buildOptionalHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.organization) headers['OpenAI-Organization'] = this.organization;
+    if (this.project) headers['OpenAI-Project'] = this.project;
+    return headers;
   }
 }
 

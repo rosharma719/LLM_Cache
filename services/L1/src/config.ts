@@ -16,6 +16,12 @@ export const config = {
     openai: {
       apiKey: process.env.OPENAI_API_KEY || '',
       model: process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL,
+      organization:
+        process.env.OPENAI_ORGANIZATION ||
+        process.env.OPENAI_ORG_ID ||
+        process.env.OPENAI_ORG ||
+        '',
+      project: process.env.OPENAI_PROJECT || '',
     },
   },
 };

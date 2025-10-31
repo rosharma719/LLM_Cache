@@ -57,3 +57,7 @@ redis-data/
 # Test artifacts
 junit.xml
 tap-snapshots/
+
+# Python bytecode
+*.pyc
+__pycache__/

@@ -18,12 +18,13 @@ export async function registerSearchRoutes(app: FastifyInstance) {
 
     try {
       const provider = getEmbeddingProvider();
-      await ensureChunkVectorIndex(provider);
 
       const [qvec] = await provider.embed([query]);
       if (!qvec) {
         return reply.code(500).send({ error: 'embedding_failed' });
       }
+
+      await ensureChunkVectorIndex(provider);
 
       const qbuf = Buffer.from(qvec.buffer, qvec.byteOffset, qvec.byteLength);
 

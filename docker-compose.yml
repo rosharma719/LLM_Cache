@@ -24,10 +24,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       PORT: "8080"
       HOST: 0.0.0.0
-      # Embeddings envs get passed from your host .env if you prefer:
-      # EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER}
-      # OPENAI_API_KEY: ${OPENAI_API_KEY}
-      # OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL}
+      # Embeddings envs get passed from your host .env (include org/project if required):
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL}
+      OPENAI_ORGANIZATION: ${OPENAI_ORGANIZATION}
+      OPENAI_PROJECT: ${OPENAI_PROJECT}
     depends_on:
       redis:
         condition: service_healthy

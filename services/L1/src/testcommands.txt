@@ -2,9 +2,13 @@
 # docker compose up -d redis
 # (Expose it locally at redis://127.0.0.1:6379 as defined in docker-compose.yml)
 # Optionally export once: export REDIS_URL=redis://127.0.0.1:6379
+# Vector-aware specs expect OPENAI_* env vars (or a mocked fetch) to be present.
 
 # OpenAI provider (no Redis dependency)
 npx vitest run test/openai.provider.spec.ts --reporter=verbose
+
+# Client-side SDK demos (fetch mocked)
+npx vitest run test/demo.cachedChat.spec.ts test/sdk.wrapWithCacheDedup.spec.ts --reporter=verbose
 
 # Vector ingestion route
 REDIS_URL=redis://127.0.0.1:6379 npx vitest run test/cache.vector.ingestion.spec.ts --reporter=verbose
