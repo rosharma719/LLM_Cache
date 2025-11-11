@@ -14,11 +14,41 @@ Dependencies: requests (install via `pip install requests`).
 
 import os
 import sys
+from pathlib import Path
 from typing import List
 
 import requests
 
 from .cache_decorator import wrap_with_cache_dedup
+
+
+def _load_env_file() -> None:
+    """Load key=value pairs from services/L1/.env if present.
+
+    The CLI often gets launched directly (e.g. `python -m src.demo.chat_cli`),
+    so the outer shell might not source `.env` beforehand. We eagerly populate
+    missing variables so the CLI behaves like the rest of the stack without
+    requiring extra steps from the user.
+    """
+
+    root_env = Path(__file__).resolve().parents[2] / '.env'
+    if not root_env.exists():
+        return
+
+    for raw_line in root_env.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue  # keep any explicit env the user already exported
+
+        os.environ[key] = value.strip().strip('"')
+
+
+_load_env_file()
 
 
 L1_BASE_URL = os.getenv("L1_BASE_URL", "http://localhost:8080")
