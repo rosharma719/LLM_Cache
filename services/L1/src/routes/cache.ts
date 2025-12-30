@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { upsertItem, getItem, deleteItem, listItemIds, getTTL, setTTL } from '../redis/kv';
 import { chunkText } from '../chunking/simple';
 import { getEmbeddingProvider } from '../embeddings';
-import { upsertChunks } from '../redis/chunk';
+import { redisL1StorageBackend } from '../storage/redisL1Storage';
+import type { ChunkPayload } from '../contracts/l1Storage';
 
 // ---------- Schemas ----------
 const writeSchema = z.object({
@@ -67,8 +67,13 @@ export async function registerCacheRoutes(app: FastifyInstance) {
     }
 
     const chunks = chunkText(text);
-    let vectors: Float32Array[] | undefined;
     let vectorError: string | undefined;
+    let vectors: Float32Array[] | undefined;
+    const chunkPayloads: ChunkPayload[] = chunks.map((chunk) => ({
+      seq: chunk.seq,
+      text: chunk.text,
+      vector: undefined as Float32Array | undefined,
+    }));
 
     if (chunks.length > 0) {
       try {
@@ -77,41 +82,30 @@ export async function registerCacheRoutes(app: FastifyInstance) {
         if (vectors.length !== chunks.length) {
           throw new Error(`expected ${chunks.length} embeddings, received ${vectors.length}`);
         }
+        chunkPayloads.forEach((payload, idx) => {
+          payload.vector = vectors?.[idx];
+        });
       } catch (err) {
         req.log.error({ err }, 'Vectorization failed for cache.write payload');
         vectorError = VECTOR_ERROR_EMBED;
-        vectors = undefined;
       }
     }
 
-    const id = await upsertItem({ ns, item_id, text, meta_json, ttl_s });
+    const result = await redisL1StorageBackend.write(
+      { ns, item_id, text, meta_json, ttl_s },
+      chunkPayloads,
+    );
 
-    let vectorized = false;
-    if (!vectorError && chunks.length > 0 && vectors) {
-      try {
-        const now = Date.now();
-        await upsertChunks(
-          ns,
-          id,
-          chunks.map((chunk) => ({
-            seq: chunk.seq,
-            text: chunk.text,
-            meta_json,
-          })),
-          vectors,
-          now,
-          ttl_s,
-        );
-        vectorized = true;
-      } catch (err) {
-        req.log.error({ err }, 'Failed to persist chunk vectors');
-        vectorError = VECTOR_ERROR_STORE;
-      }
+    if (result.vectorError === VECTOR_ERROR_STORE) {
+      req.log.error(
+        { detail: result.vectorErrorDetail },
+        'Failed to persist chunk vectors',
+      );
     }
 
-    const response: Record<string, unknown> = { item_id: id, vectorized };
-    if (vectorError) response.vector_error = vectorError;
-
+    const response: Record<string, unknown> = { item_id: result.itemId, vectorized: result.vectorized };
+    const combinedVectorError = vectorError ?? result.vectorError;
+    if (combinedVectorError) response.vector_error = combinedVectorError;
     return reply.send(response);
   });
 
@@ -121,19 +115,9 @@ export async function registerCacheRoutes(app: FastifyInstance) {
     if (!parsed.success) return badRequest(reply, parsed);
 
     const { ns, item_id } = parsed.data;
-    const item = await getItem(ns, item_id);
+    const item = await redisL1StorageBackend.read(ns, item_id);
     if (!item) return reply.code(404).send({ error: 'not_found' });
-
-    // Parse meta_json back to object (ignore parse errors gracefully)
-    let meta: unknown | undefined;
-    if (item.meta_json) {
-      try {
-        meta = JSON.parse(item.meta_json);
-      } catch {
-        meta = undefined;
-      }
-    }
-    return reply.send({ ...item, meta });
+    return reply.send(item);
   });
 
   // Delete
@@ -142,7 +126,7 @@ export async function registerCacheRoutes(app: FastifyInstance) {
     if (!parsed.success) return badRequest(reply, parsed);
 
     const { ns, item_id } = parsed.data;
-    const ok = await deleteItem(ns, item_id);
+    const ok = await redisL1StorageBackend.delete(ns, item_id);
     return reply.send({ ok });
   });
 
@@ -153,7 +137,7 @@ export async function registerCacheRoutes(app: FastifyInstance) {
 
     const ns = parsed.data.ns;
     const count = parsed.data.count ?? 100;
-    const ids = await listItemIds(ns, count);
+    const ids = await redisL1StorageBackend.list(ns, count);
     return reply.send({ item_ids: ids });
   });
 
@@ -163,7 +147,7 @@ export async function registerCacheRoutes(app: FastifyInstance) {
     if (!parsed.success) return badRequest(reply, parsed);
 
     const { item_id, ttl_s } = parsed.data;
-    const ok = await setTTL(item_id, ttl_s);
+    const ok = await redisL1StorageBackend.setTTL(item_id, ttl_s);
     return reply.send({ ok });
   });
 
@@ -173,7 +157,7 @@ export async function registerCacheRoutes(app: FastifyInstance) {
     if (!parsed.success) return badRequest(reply, parsed);
 
     const { item_id } = parsed.data;
-    const ttl = await getTTL(item_id);
+    const ttl = await redisL1StorageBackend.getTTL(item_id);
     return reply.send({ ttl });
   });
 }

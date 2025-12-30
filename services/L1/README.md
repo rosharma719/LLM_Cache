@@ -147,3 +147,11 @@ Set `L1_MAX_DISTANCE` to tighten or loosen cache hits (defaults to `0.5` cosine 
 - Exact repeats are stored under deterministic IDs (`dedup:<namespace>:<sha1(prompt)>`), so they never hit the vector index.
 - Similar prompts reuse cached answers when the cosine distance is ≤ `L1_MAX_DISTANCE`. Increase the threshold (for example `0.8`) if you want looser matches.
 - If you ever drop the RediSearch index (e.g. `docker exec redis-stack redis-cli FT.DROPINDEX idx:l1:chunks DD`), the next `/search.vector` call will recreate it with the correct embedding dimension—send a prompt afterwards to seed fresh vectors before testing hits.
+
+## Contracts & abstractions
+
+To keep the L1 implementation modular and ready for an L2 partner, the new `src/contracts/` directory captures the runtime contracts:
+
+- `contracts/context.ts` defines the session/agent traces that travel with every request so provenance and deduplication remain consistent.
+- `contracts/l1Storage.ts` describes the L1 storage interface (writes, replays, chunk metadata, and vector search results) that any backend implementation can satisfy.
+- `contracts/l1l2.ts` outlines the L1 ↔ L2 handshake, including provenance records, vector search requests, and event envelopes so a future orchestrator can consume cache writes and coordinate distributed answers.
